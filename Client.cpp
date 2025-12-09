@@ -16,235 +16,269 @@ CWinApp theApp;
 
 using namespace std;
 
-// --- ĐỊNH NGHĨA CÁC TRẠNG THÁI RTSP ---
+// =======================================================================
+//  ENUM TRẠNG THÁI RTSP
+// =======================================================================
 enum RTSPState {
-	INIT = 0,
-	READY = 1,
-	PLAYING = 2
+    INIT = 0,
+    READY = 1,
+    PLAYING = 2
 };
 
-// --- CLASS HỖ TRỢ XỬ LÝ RTSP (Nằm gọn trong file cpp) ---
+// =======================================================================
+//  CLASS RTSP CLIENT HELPER (đặt trong file cpp giống format mẫu)
+// =======================================================================
 class RTSPClientHelper {
 public:
-	CSocket* m_pRtspSocket; // Con trỏ tới Socket TCP đã kết nối trong main
-	CSocket  m_RtpSocket;   // Socket UDP nhận dữ liệu (tự quản lý)
-	
-	int m_nState;
-	int m_nCSeq;
-	int m_nRtpPort;
-	CString m_szSessionId;
-	CString m_szFileName;
+    CSocket* m_pRtspSocket;   // Socket TCP điều khiển RTSP
+    CSocket  m_RtpSocket;     // Socket UDP nhận RTP
 
-	RTSPClientHelper(CSocket* pSocket) {
-		m_pRtspSocket = pSocket;
-		m_nState = INIT;
-		m_nCSeq = 1;
-		m_nRtpPort = 25000;         // Port nhận UDP mặc định
-		m_szFileName = _T("movie.Mjpeg"); // Tên file video
-	}
+    int m_nState;   // trạng thái client: INIT, READY, PLAYING
+    int m_nCSeq;    // sequence number
+    int m_nRtpPort; //cổng
 
-	// Hàm gửi Request và nhận Response chung
-	void SendRTSPRequest(CString method) {
-		CString strRequest;
+    CString m_szSessionId;  // id session
+    CString m_szFileName;  // Têm file video
 
-		// 1. Tạo Header cơ bản
-		strRequest.Format(_T("%s %s RTSP/1.0\r\nCSeq: %d\r\n"), method, m_szFileName, m_nCSeq);
+    RTSPClientHelper(CSocket* pSocket)
+        : m_pRtspSocket(pSocket),
+          m_nState(INIT),
+          m_nCSeq(1),
+          m_nRtpPort(25000),
+          m_szFileName(_T("movie.Mjpeg"))
+    {}
 
-		// 2. Xử lý Header đặc thù
-		if (method == _T("SETUP")) {
-			CString strTransport;
-			strTransport.Format(_T("Transport: RTP/UDP; client_port=%d\r\n"), m_nRtpPort);
-			strRequest += strTransport;
-		}
-		else {
-			// PLAY, PAUSE, TEARDOWN cần Session ID
-			if (!m_szSessionId.IsEmpty()) {
-				CString strSession;
-				strSession.Format(_T("Session: %s\r\n"), m_szSessionId);
-				strRequest += strSession;
-			}
-		}
+    // ===================================================================
+    // Gửi RTSP Request
+    // ===================================================================
+    void SendRTSPRequest(CString method)
+    {
+        CString strRequest;
 
-		// Kết thúc Header
-		strRequest += _T("\r\n");
+        // Header chung
+        strRequest.Format(_T("%s %s RTSP/1.0\r\nCSeq: %d\r\n"), method, m_szFileName, m_nCSeq);
 
-		// Gửi đi (In ra màn hình để debug)
-		wcout << _T("[CLIENT SEND]:\n") << (LPCTSTR)strRequest << endl;
-		m_pRtspSocket->Send(strRequest, strRequest.GetLength());
+        // Header đặc thù
+        if (method == _T("SETUP")) {
+            CString strTransport;
+            strTransport.Format(_T("Transport: RTP/UDP; client_port=%d\r\n"), m_nRtpPort);
+            strRequest += strTransport;
+        }
+        else {
+            if (!m_szSessionId.IsEmpty()) {
+                CString strSession;
+                strSession.Format(_T("Session: %s\r\n"), m_szSessionId);
+                strRequest += strSession;
+            }
+        }
 
-		// Tăng CSeq
-		m_nCSeq++;
+        strRequest += _T("\r\n");
 
-		// Đọc phản hồi ngay lập tức
-		ParseServerResponse();
-	}
+        // Debug
+        wcout << _T("[CLIENT SEND]:\n") << (LPCTSTR)strRequest << endl;
 
-	// Hàm phân tích phản hồi từ Server
-	void ParseServerResponse() {
-		char buffer[4096];
-		int len = m_pRtspSocket->Receive(buffer, 4096);
-		if (len > 0) {
-			buffer[len] = '\0';
-			CString strResponse(buffer);
-			
-			// In phản hồi ra màn hình
-			wcout << _T("[SERVER RESPONSE]:\n") << (LPCTSTR)strResponse << endl;
+        // Gửi TCP, tăng sequence num
+        m_pRtspSocket->Send(strRequest, strRequest.GetLength());
+        m_nCSeq++;
 
-			// Nếu thành công 200 OK
-			if (strResponse.Find(_T("200 OK")) != -1) {
-				// Tìm và lưu Session ID
-				int idx = strResponse.Find(_T("Session: "));
-				if (idx != -1) {
-					CString strTemp = strResponse.Mid(idx + 9);
-					int endIdx = strTemp.Find(_T("\r\n"));
-					if (endIdx != -1) {
-						m_szSessionId = strTemp.Left(endIdx);
-						wcout << _T("=> Da lay duoc Session ID: ") << (LPCTSTR)m_szSessionId << endl;
-					}
-				}
-			}
-		}
-	}
+        // Đọc response
+        ParseServerResponse();
+    }
 
-	// --- CÁC HÀM XỬ LÝ LỆNH ---
+    // ===================================================================
+    // Phân tích phản hồi từ server
+    // ===================================================================
+    void ParseServerResponse()
+    {
+        char buffer[4096];
+        int len = m_pRtspSocket->Receive(buffer, 4096);
 
-	void DoSetup() {
-		if (m_nState == INIT) {
-			// 1. Tạo Socket UDP
-			if (m_RtpSocket.Create(m_nRtpPort, SOCK_DGRAM) == 0) {
-				cout << "Loi tao socket UDP!" << endl;
-				return;
-			}
-			// 2. Set Timeout 0.5s (500ms)
-			int timeOut = 500;
-			m_RtpSocket.SetSockOpt(SO_RCVTIMEO, &timeOut, sizeof(int), SOL_SOCKET);
-			
-			cout << "=> Da tao UDP Socket tai port " << m_nRtpPort << " (Timeout 0.5s)" << endl;
+        if (len > 0)
+        {
+            buffer[len] = '\0';
+            CString strResponse(buffer);
 
-			// 3. Gửi lệnh
-			SendRTSPRequest(_T("SETUP"));
+            wcout << _T("[SERVER RESPONSE]:\n") << (LPCTSTR)strResponse << endl;
 
-			// 4. Đổi trạng thái
-			if (!m_szSessionId.IsEmpty()) m_nState = READY;
-		} else {
-			cout << "Loi: Chi co the SETUP khi o trang thai INIT." << endl;
-		}
-	}
+            // Nếu server trả 200 OK
+            if (strResponse.Find(_T("200 OK")) != -1)
+            {
+                int idx = strResponse.Find(_T("Session: "));
+                if (idx != -1)
+                {
+                    CString strTemp = strResponse.Mid(idx + 9);
+                    int endIdx = strTemp.Find(_T("\r\n"));
 
-	void DoPlay() {
-		if (m_nState == READY) {
-			SendRTSPRequest(_T("PLAY"));
-			m_nState = PLAYING;
-			cout << "=> Dang choi video (Gia lap nhan RTP)..." << endl;
-		} else if (m_nState == PLAYING) {
-			cout << "Loi: Dang PLAY roi." << endl;
-		} else {
-			cout << "Loi: Can SETUP truoc." << endl;
-		}
-	}
+                    if (endIdx != -1)
+                    {
+                        m_szSessionId = strTemp.Left(endIdx);
+                        wcout << _T("=> Lay Session ID: ") 
+                              << (LPCTSTR)m_szSessionId << endl;
+                    }
+                }
+            }
+        }
+    }
 
-	void DoPause() {
-		if (m_nState == PLAYING) {
-			SendRTSPRequest(_T("PAUSE"));
-			m_nState = READY;
-		} else {
-			cout << "Loi: Chi co thể PAUSE khi đang PLAYING." << endl;
-		}
-	}
+    // ===================================================================
+    // SETUP
+    // ===================================================================
+    void DoSetup()
+    {
+        if (m_nState == INIT)
+        {
+            if (m_RtpSocket.Create(m_nRtpPort, SOCK_DGRAM) == 0) {
+                cout << "Loi tao socket UDP!" << endl;
+                return;
+            }
 
-	void DoTeardown() {
-		SendRTSPRequest(_T("TEARDOWN"));
-		m_RtpSocket.Close();
-		m_szSessionId = _T("");
-		m_nState = INIT;
-		cout << "=> Da dong ket noi UDP va reset trang thai." << endl;
-	}
+            int timeOut = 500;
+            m_RtpSocket.SetSockOpt(SO_RCVTIMEO, &timeOut, sizeof(int), SOL_SOCKET);
+
+            cout << "=> Tao UDP Socket tai port " << m_nRtpPort << endl;
+
+            SendRTSPRequest(_T("SETUP"));
+
+            if (!m_szSessionId.IsEmpty())
+                m_nState = READY;
+        }
+        else {
+            cout << "Loi: Chi SETUP khi o INIT." << endl;
+        }
+    }
+
+    // ===================================================================
+    // PLAY
+    // ===================================================================
+    void DoPlay()
+    {
+        if (m_nState == READY) {
+            SendRTSPRequest(_T("PLAY"));
+            m_nState = PLAYING;
+            cout << "=> Playing video..." << endl;
+        }
+        else if (m_nState == PLAYING) {
+            cout << "Loi: Dang PLAY." << endl;
+        }
+        else {
+            cout << "Loi: Chua SETUP." << endl;
+        }
+    }
+
+    // ===================================================================
+    // PAUSE
+    // ===================================================================
+    void DoPause()
+    {
+        if (m_nState == PLAYING)
+        {
+            SendRTSPRequest(_T("PAUSE"));
+            m_nState = READY;
+        }
+        else {
+            cout << "Loi: Chi PAUSE khi PLAYING." << endl;
+        }
+    }
+
+    // ===================================================================
+    // TEARDOWN
+    // ===================================================================
+    void DoTeardown()
+    {
+        SendRTSPRequest(_T("TEARDOWN"));
+        m_RtpSocket.Close();
+        m_szSessionId = _T("");
+        m_nState = INIT;
+
+        cout << "=> Dong UDP & reset trang thai." << endl;
+    }
 };
 
-// --- HÀM MAIN ---
+
+// =======================================================================
+//  HÀM MAIN – Format giống hệt Demo_Client.cpp
+// =======================================================================
 
 int _tmain(int argc, TCHAR* argv[], TCHAR* envp[])
 {
-	int nRetCode = 0;
+    int nRetCode = 0;
 
-	// initialize MFC and print and error on failure
-	if (!AfxWinInit(::GetModuleHandle(NULL), NULL, ::GetCommandLine(), 0))
-	{
-		_tprintf(_T("Fatal Error: MFC initialization failed\n"));
-		nRetCode = 1;
-	}
-	else
-	{
-		// Khoi tao Thu vien Socket
-		if( AfxSocketInit() == FALSE)
-		{ 
-			cout << "Khong the khoi tao Socket Library";
-			return FALSE; 
-		}
+    HMODULE hModule = ::GetModuleHandle(NULL);
 
-		// Tao socket TCP de dieu khien RTSP
-		CSocket ClientSocket;
-		ClientSocket.Create();
+    if (hModule != NULL)
+    {
+        // Init MFC
+        if (!AfxWinInit(hModule, NULL, ::GetCommandLine(), 0))
+        {
+            _tprintf(_T("Fatal Error: MFC initialization failed\n"));
+            nRetCode = 1;
+        }
+        else
+        {
+            // ===============================
+            // Init Socket
+            // ===============================
+            if (!AfxSocketInit(NULL)) {
+                cout << "Khong the khoi tao Socket Library" << endl;
+                return FALSE;
+            }
 
-		// Ket noi den Server
-		// Luu y: Port RTSP mac dinh la 554, nhung bai lab co the dung 1234 hoac port khac
-		// Ban hay doi so 554 duoi day thanh port ma Server cua ban dang mo (vd: 1234)
-		int serverPort = 554; 
-		CString serverIP = _T("127.0.0.1");
+            CSocket client;
+            client.Create();
 
-		cout << "Dang ket noi toi Server " << serverIP << ":" << serverPort << "..." << endl;
+            CString serverIP = _T("127.0.0.1");
+            int     serverPort = 554;
 
-		if(ClientSocket.Connect(serverIP, serverPort) != 0)
-		{
-			cout << "Ket noi toi Server thanh cong !!!" << endl << endl;
-			
-			// Khoi tao Helper de xu ly RTSP logic
-			RTSPClientHelper rtspClient(&ClientSocket);
+            cout << "Dang ket noi toi Server " << serverIP << ":" << serverPort << endl;
 
-			char cmdBuffer[100];
-			
-			// Vong lap dieu khien (Thay vi bam nut, ta go lenh)
-			while (true)
-			{
-				cout << "\n------------------------------------------------";
-				cout << "\nNhap lenh (setup, play, pause, teardown, exit): ";
-				cin.getline(cmdBuffer, 100);
+            if (client.Connect(serverIP, serverPort) != 0)
+            {
+                cout << "Ket noi thanh cong!" << endl;
 
-				CString cmd(cmdBuffer);
-				cmd.MakeLower(); // Chuyen ve chu thuong de so sanh
+                RTSPClientHelper rtsp(&client);
 
-				if (cmd == "setup") {
-					rtspClient.DoSetup();
-				}
-				else if (cmd == "play") {
-					rtspClient.DoPlay();
-				}
-				else if (cmd == "pause") {
-					rtspClient.DoPause();
-				}
-				else if (cmd == "teardown") {
-					rtspClient.DoTeardown();
-				}
-				else if (cmd == "exit") {
-					// Gui teardown truoc khi thoat cho lich su
-					if(rtspClient.m_nState != INIT) rtspClient.DoTeardown();
-					break;
-				}
-				else {
-					cout << "Lenh khong hop le!" << endl;
-				}
-			}
-		}
-		else
-		{
-			int err = GetLastError();
-			cout << "Khong the ket noi den Server !!! Ma loi: " << err << endl;
-			cout << "Luu y: Kiem tra lai Port va IP cua Server." << endl;
-		}
+                char cmdBuffer[100];
 
-		// Dong ket noi TCP
-		ClientSocket.Close();
-	}
+                // ===============================
+                // Vòng lặp điều khiển
+                // ===============================
+                while (true)
+                {
+                    cout << "\n------------------------------------------------";
+                    cout << "\nNhap lenh (setup/play/pause/teardown/exit): ";
+                    cin.getline(cmdBuffer, 100);
 
-	return nRetCode;
+                    CString cmd(cmdBuffer);
+                    cmd.MakeLower();
+
+                    if (cmd == "setup") rtsp.DoSetup();
+                    else if (cmd == "play") rtsp.DoPlay();
+                    else if (cmd == "pause") rtsp.DoPause();
+                    else if (cmd == "teardown") rtsp.DoTeardown();
+                    else if (cmd == "exit") {
+                        if (rtsp.m_nState != INIT)
+                            rtsp.DoTeardown();
+                        break;
+                    }
+                    else {
+                        cout << "Lenh khong hop le!" << endl;
+                    }
+                }
+            }
+            else
+            {
+                int err = GetLastError();
+                cout << "Khong the ket noi den Server! Ma loi: " << err << endl;
+            }
+
+            client.Close();
+        }
+    }
+    else
+    {
+        _tprintf(_T("Fatal Error: GetModuleHandle failed\n"));
+        nRetCode = 1;
+    }
+
+    return nRetCode;
 }
