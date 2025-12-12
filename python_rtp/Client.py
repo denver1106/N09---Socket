@@ -39,15 +39,8 @@ class Client:
 		self.teardownAcked = 0
 		self.connectToServer()
 		self.frameNbr = 0
-
-		# jitter để đo độ trễ mạng (gói trước đó và gói hiện tại)
-		# self.jitter = 0.0 
-
-		# lưu thời gian packet đến thực tế của gói trước đó
-		# self.pre_arrival = 0.0 
-
-		# lưu thời gian packet được gửi từ server của gói trước đó
-		# self.pre_timestamp = 0.0 
+		# self.playEvent = threading.Event()
+		# self.playEvent.clear()
 
 		# danh sách hàng đợi buffer pritorityQueue (đẩy packet/frame vào đúng thứ tự sequence number), max hàng đợi là 200 packet/frame
 		self.buffer = queue.PriorityQueue(maxsize=200)
@@ -103,12 +96,16 @@ class Client:
 	def pauseMovie(self):
 		"""Pause button handler."""
 		if self.state == self.PLAYING:
+			if hasattr(self, 'playEvent') and self.playEvent is not None:
+				self.playEvent.set()
 			self.sendRtspRequest(self.PAUSE)
 	
 	def playMovie(self):
 		"""Play button handler."""
-		if self.state == self.READY:
-			# Reset biến theo dõi buffer để bắt đầu nạp
+		if self.state == self.READY or self.state == self.PAUSED:
+			# Reset biến theo dõi buffer để bắt đầu nạp lai
+			self.playEvent = threading.Event()
+			self.playEvent.clear()
 			self.is_pre_buffering = True
 
 			# Create a new thread to listen for RTP packets (để nạp vào buffer)
@@ -116,39 +113,23 @@ class Client:
 			threading.Thread(target=self.listenRtp).start()
 
 			# Lấy frame từ buffer để chạy video
-			threading.thread(target=self.handleBuffer).start()
+			threading.Thread(target=self.handleBuffer).start()
 
-			self.playEvent = threading.Event()
-			self.playEvent.clear()
+			
 			self.sendRtspRequest(self.PLAY)
 	
 	def listenRtp(self):		
 		"""Listen for RTP packets."""
+		
 		while True:
 			try:
 				data = self.rtpSocket.recv(20480)
 				if data:
-					# curr_arrival = time.time()
-
 					rtpPacket = RtpPacket() #tạo RtpPacket
 					rtpPacket.decode(data) #tách header RTP + payload 
 
 					curr_seq = rtpPacket.seqNum()
 					print("Current Seq Num: " + str(curr_seq))
-					# curr_timestamp = rtpPacket.timestamp()
-					
-					
-					# if self.frameNbr > 0 and self.pre_arrival > 0:
-					# 	delta_arrival = curr_arrival - self.pre_arrival
-					# 	delta_timestamp = (curr_timestamp - self.pre_timestamp) / 20.0
-					# 	D = abs(delta_arrival - delta_timestamp)
-					# 	self.jitter = self.jitter + (D - self.jitter) / 16.0
-
-					# 	# print(f"Seq: {curr_seq} | Jitter: {self.jitter:.5f}")
-					
-					# # cập nhật pre arrival và pre timestamp cho lần tính toán tiếp theo
-					# self.pre_arrival = curr_arrival
-					# self.pre_timestamp = curr_timestamp
 					
 					# nếu frame number hiện tại lớn hơn frame number trước đó => đúng thứ tự gói tin 
 					if curr_seq > self.frameNbr: 
@@ -186,19 +167,10 @@ class Client:
 
 			# Nếu buffer không trống
 			if not self.buffer.empty():
+				# Pop để lấy frame và data
 				seqNum, data = self.buffer.get()
 				self.frameNbr = seqNum
 				self.updateMovie(self.writeFrame(data))
-
-				# # fps_default = 0.05
-
-				# # if self.jitter > 0.05 or current_buffer_size < 5:
-				# # 	fps_reality = fps_default + 0.01
-				# # elif current_buffer_size > 50:
-				# # 	fps_reality = fps_default - 0.01
-				# # else:
-				# 	fps_reality = fps_default
-
 				time.sleep(0.05)
 			
 			else:
