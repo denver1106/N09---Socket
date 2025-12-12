@@ -12,16 +12,32 @@ class RtpPacket:
 		"""Encode the RTP packet with header fields and payload."""
 		timestamp = int(time())
 		header = bytearray(HEADER_SIZE)
-		#--------------
-		# TO COMPLETE
-		#--------------
-		# Fill the header bytearray with RTP header fields
 		
-		# header[0] = ...
-		# ...
-		
-		# Get the payload from the argument
-		# self.payload = ...
+		# Byte 0: V (2 bits), P (1 bit), X (1 bit), CC (4 bits)
+		header[0] = (version << 6) | (padding << 5) | (extension << 4) | (cc & 0x0F)
+
+		# Byte 1: M (1 bit), PT (7 bits)
+		header[1] = (marker << 7) | (pt & 0x7F)	#marker = 0, pt = 26
+
+		# Bytes 2-3: Sequence Number (16 bits)
+		header[2] = (seqnum >> 8) & 0xFF
+		header[3] = seqnum & 0xFF
+
+		# Bytes 4-7: Timestamp (32 bits)
+		header[4] = (timestamp >> 24) & 0xFF
+		header[5] = (timestamp >> 16) & 0xFF
+		header[6] = (timestamp >> 8) & 0xFF
+		header[7] = timestamp & 0xFF
+
+		# Bytes 8-11: SSRC (32 bits)
+		header[8]  = (ssrc >> 24) & 0xFF
+		header[9]  = (ssrc >> 16) & 0xFF
+		header[10] = (ssrc >> 8) & 0xFF
+		header[11] = ssrc & 0xFF
+
+		# Lưu lại header và payload trong đối tượng
+		self.header = header
+		self.payload = payload
 		
 	def decode(self, byteStream):
 		"""Decode the RTP packet."""
@@ -54,3 +70,5 @@ class RtpPacket:
 	def getPacket(self):
 		"""Return RTP packet."""
 		return self.header + self.payload
+	
+ 
