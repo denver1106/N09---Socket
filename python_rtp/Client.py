@@ -1,9 +1,14 @@
 from tkinter import *
-import tkinter.messagebox
+import tkinter.messagebox as tkMessageBox
 from PIL import Image, ImageTk
 import socket, threading, sys, traceback, os
 
 from RtpPacket import RtpPacket
+
+# Thư viện bổ trợ cho lưu buffer và tính toán jitter
+import queue
+import time
+
 
 CACHE_FILE_NAME = "cache-"
 CACHE_FILE_EXT = ".jpg"
@@ -34,6 +39,25 @@ class Client:
 		self.teardownAcked = 0
 		self.connectToServer()
 		self.frameNbr = 0
+
+		# jitter để đo độ trễ mạng (gói trước đó và gói hiện tại)
+		# self.jitter = 0.0 
+
+		# lưu thời gian packet đến thực tế của gói trước đó
+		# self.pre_arrival = 0.0 
+
+		# lưu thời gian packet được gửi từ server của gói trước đó
+		# self.pre_timestamp = 0.0 
+
+		# danh sách hàng đợi buffer pritorityQueue (đẩy packet/frame vào đúng thứ tự sequence number), max hàng đợi là 200 packet/frame
+		self.buffer = queue.PriorityQueue(maxsize=200)
+
+		# số frame cần đạt trong hàng đợi buffer trước khi bắt đầu hiển thị video
+		self.N_PRE_BUFFER = 20
+
+		# biến theo dõi nạp frame vào buffer
+		self.is_pre_buffering = True
+
 		
 	def createWidgets(self):
 		"""Build GUI."""
@@ -84,8 +108,16 @@ class Client:
 	def playMovie(self):
 		"""Play button handler."""
 		if self.state == self.READY:
-			# Create a new thread to listen for RTP packets
+			# Reset biến theo dõi buffer để bắt đầu nạp
+			self.is_pre_buffering = True
+
+			# Create a new thread to listen for RTP packets (để nạp vào buffer)
+			# Thay vì ban đầu listenRtp nhận tới đâu hiện tới đó, thì bây giờ sẽ chỉ nhận để đẩy vào buffer để tránh hiện tượng giật lag
 			threading.Thread(target=self.listenRtp).start()
+
+			# Lấy frame từ buffer để chạy video
+			threading.thread(target=self.handleBuffer).start()
+
 			self.playEvent = threading.Event()
 			self.playEvent.clear()
 			self.sendRtspRequest(self.PLAY)
@@ -96,18 +128,35 @@ class Client:
 			try:
 				data = self.rtpSocket.recv(20480)
 				if data:
-					rtpPacket = RtpPacket()
-					rtpPacket.decode(data)
+					# curr_arrival = time.time()
+
+					rtpPacket = RtpPacket() #tạo RtpPacket
+					rtpPacket.decode(data) #tách header RTP + payload 
+
+					curr_seq = rtpPacket.seqNum()
+					print("Current Seq Num: " + str(curr_seq))
+					# curr_timestamp = rtpPacket.timestamp()
 					
-					currFrameNbr = rtpPacket.seqNum()
-					print("Current Seq Num: " + str(currFrameNbr))
-										
-					if currFrameNbr > self.frameNbr: # Discard the late packet
-						self.frameNbr = currFrameNbr
-						self.updateMovie(self.writeFrame(rtpPacket.getPayload()))
+					
+					# if self.frameNbr > 0 and self.pre_arrival > 0:
+					# 	delta_arrival = curr_arrival - self.pre_arrival
+					# 	delta_timestamp = (curr_timestamp - self.pre_timestamp) / 20.0
+					# 	D = abs(delta_arrival - delta_timestamp)
+					# 	self.jitter = self.jitter + (D - self.jitter) / 16.0
+
+					# 	# print(f"Seq: {curr_seq} | Jitter: {self.jitter:.5f}")
+					
+					# # cập nhật pre arrival và pre timestamp cho lần tính toán tiếp theo
+					# self.pre_arrival = curr_arrival
+					# self.pre_timestamp = curr_timestamp
+					
+					# nếu frame number hiện tại lớn hơn frame number trước đó => đúng thứ tự gói tin 
+					if curr_seq > self.frameNbr: 
+						# đẩy vào buffer
+						self.buffer.put((curr_seq, rtpPacket.getPayload()))
 			except:
 				# Stop listening upon requesting PAUSE or TEARDOWN
-				if self.playEvent.isSet(): 
+				if self.playEvent.is_set(): 
 					break
 				
 				# Upon receiving ACK for TEARDOWN request,
@@ -116,7 +165,47 @@ class Client:
 					self.rtpSocket.shutdown(socket.SHUT_RDWR)
 					self.rtpSocket.close()
 					break
-					
+
+	def handleBuffer(self):
+		while not self.playEvent.is_set():
+			#Lấy số frame hiện tại
+			current_buffer_size = self.buffer.qsize()
+
+			# Nếu chưa đủ frame
+			if self.is_pre_buffering:
+				if current_buffer_size < self.N_PRE_BUFFER:
+					# Chưa đủ frame yêu cầu, chờ nạp tiếp
+					time.sleep(0.01)
+
+					# Bỏ qua phần hiển thị bên dưới
+					continue 
+			else:
+				# Đánh dấu đã nạp xong
+				self.is_pre_buffering = False
+				print("Enough frame in buffer!")
+
+			# Nếu buffer không trống
+			if not self.buffer.empty():
+				seqNum, data = self.buffer.get()
+				self.frameNbr = seqNum
+				self.updateMovie(self.writeFrame(data))
+
+				# # fps_default = 0.05
+
+				# # if self.jitter > 0.05 or current_buffer_size < 5:
+				# # 	fps_reality = fps_default + 0.01
+				# # elif current_buffer_size > 50:
+				# # 	fps_reality = fps_default - 0.01
+				# # else:
+				# 	fps_reality = fps_default
+
+				time.sleep(0.05)
+			
+			else:
+				print("Empty buffer. Reloading!")
+				self.is_pre_buffering = True
+				time.sleep(0.01)
+
 	def writeFrame(self, data):
 		"""Write the received frame to a temp image file. Return the image file."""
 		cachename = CACHE_FILE_NAME + str(self.sessionId) + CACHE_FILE_EXT
@@ -253,7 +342,7 @@ class Client:
 		
 		try:
 			# Bind the socket to the address using the RTP port given by the client user
-			self.rtpSocket.bind('',self.rtpPort)
+			self.rtpSocket.bind(('',self.rtpPort))
 		except:
 			tkMessageBox.showwarning('Unable to Bind', 'Unable to bind PORT=%d' %self.rtpPort)
 
