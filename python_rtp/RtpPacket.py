@@ -71,4 +71,11 @@ class RtpPacket:
 		"""Return RTP packet."""
 		return self.header + self.payload
 	
+	# Bổ trợ cho HD streaming
+	def getMarker(self):
+		"""Return marker bit (M). Used for fragmentation/reassembly."""
+		# Lấy bit đầu tiên của byte thứ 2 (header[1])
+		marker = (self.header[1] >> 7) & 1
+		return int(marker)
+	
  
