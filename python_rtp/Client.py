@@ -50,10 +50,10 @@ class Client:
 		# biến theo dõi nạp frame vào buffer
 		self.is_pre_buffering = True
 
-		# [THÊM] Biến hỗ trợ HD Streaming: Bộ đệm tạm để ghép các mảnh gói tin thành 1 frame hoàn chỉnh
+		# Biến hỗ trợ HD Streaming: Bộ đệm tạm để ghép các mảnh gói tin thành 1 frame hoàn chỉnh
 		self.currentFrameBuffer = b""
 
-		# [THÊM] Các biến thống kê (Analysis)
+		# Các biến thống kê (Analysis)
 		self.statTotalRecv = 0      # Tổng số gói nhận được
 		self.statLost = 0           # Tổng số gói bị mất
 		self.lastRxSeq = 0          # Sequence number của gói nhận gần nhất
@@ -98,7 +98,7 @@ class Client:
 		"""Teardown button handler."""
 		self.sendRtspRequest(self.TEARDOWN)		
 		
-		# [THÊM] In báo cáo Packet Loss khi đóng Client
+		# In báo cáo Packet Loss khi đóng Client
 		if self.statTotalRecv > 0:
 			loss_rate = float(self.statLost) / (self.statTotalRecv + self.statLost) * 100
 			print("\n------------------------------------------------")
@@ -110,7 +110,7 @@ class Client:
 			print("------------------------------------------------\n")
 
 		self.master.destroy() # Close the gui window
-		# [THÊM] Thêm try-except để tránh lỗi nếu file không tồn tại
+		# Thêm try-except để tránh lỗi nếu file không tồn tại
 		try:
 			os.remove(CACHE_FILE_NAME + str(self.sessionId) + CACHE_FILE_EXT) # Delete the cache image from video
 		except:
@@ -171,7 +171,6 @@ class Client:
 					self.currentFrameBuffer += rtpPacket.getPayload()
 
 					# Kiểm tra Marker bit để biết đây có phải gói cuối cùng của frame không
-					# Yêu cầu file RtpPacket.py đã có hàm getMarker()
 					if rtpPacket.getMarker() == 1:
 						# Nếu đúng là gói cuối, và frame mới hơn frame đang hiện
 						if curr_seq > self.frameNbr: 
@@ -235,7 +234,7 @@ class Client:
 	
 	def updateMovie(self, imageFile):
 		"""Update the image file as video frame in the GUI."""
-		# [THÊM] Thêm try-except để tránh crash nếu file ảnh bị lỗi do mất gói
+		# Thêm try-except để tránh crash nếu file ảnh bị lỗi do mất gói
 		try:
 			photo = ImageTk.PhotoImage(Image.open(imageFile))
 			self.label.configure(image = photo, height=288) 
