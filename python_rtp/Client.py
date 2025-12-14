@@ -110,7 +110,7 @@ class Client:
 			print("------------------------------------------------\n")
 
 		self.master.destroy() # Close the gui window
-		# Thêm try-except để tránh lỗi nếu file không tồn tại
+		# Try-except để tránh lỗi nếu file không tồn tại
 		try:
 			os.remove(CACHE_FILE_NAME + str(self.sessionId) + CACHE_FILE_EXT) # Delete the cache image from video
 		except:
@@ -136,7 +136,7 @@ class Client:
 			self.is_pre_buffering = True
 
 			# Create a new thread to listen for RTP packets (để nạp vào buffer)
-			# Thay vì ban đầu listenRtp nhận tới đâu hiện tới đó, thì bây giờ sẽ chỉ nhận để đẩy vào buffer để tránh hiện tượng giật lag
+			# Nhận để đẩy vào buffer để tránh hiện tượng giật lag
 			threading.Thread(target=self.listenRtp).start()
 
 			# Lấy frame từ buffer để chạy video
@@ -166,8 +166,7 @@ class Client:
 					self.statTotalRecv += 1
 					self.lastRxSeq = curr_seq
 
-					# Logic Reassembly cho HD Streaming
-					# Thay vì đẩy ngay vào buffer, ta gom payload vào buffer tạm
+					# Gom payload vào buffer tạm
 					self.currentFrameBuffer += rtpPacket.getPayload()
 
 					# Kiểm tra Marker bit để biết đây có phải gói cuối cùng của frame không
@@ -234,7 +233,7 @@ class Client:
 	
 	def updateMovie(self, imageFile):
 		"""Update the image file as video frame in the GUI."""
-		# Thêm try-except để tránh crash nếu file ảnh bị lỗi do mất gói
+		# Try-except để tránh crash nếu file ảnh bị lỗi do mất gói
 		try:
 			photo = ImageTk.PhotoImage(Image.open(imageFile))
 			self.label.configure(image = photo, height=288) 

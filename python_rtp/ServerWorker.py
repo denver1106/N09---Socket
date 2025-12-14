@@ -143,7 +143,6 @@ class ServerWorker:
 			data = self.clientInfo['videoStream'].nextFrame()
 			
 			if data: 
-				# frameNumber này chỉ dùng để biết đang ở khung hình nào, còn seq phải đánh theo gói tin gửi đi
 				frameNumber = self.clientInfo['videoStream'].frameNbr()
 				
 				try:
