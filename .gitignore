@@ -1,0 +1,18 @@
+# Video test / stream
+*.mjpeg
+*.Mjpeg
+*.mp4
+*.avi
+*.mkv
+
+# Cache / temp
+cache/
+tmp/
+
+# Build files
+build/
+cmake-build-*/
+
+# OS / IDE
+.vscode/
+*.log
