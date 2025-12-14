@@ -5,6 +5,8 @@
 *.avi
 *.mkv
 
+*.pyc
+
 # Cache / temp
 cache/
 tmp/

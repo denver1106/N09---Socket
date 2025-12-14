@@ -3,6 +3,7 @@ import tkinter.messagebox
 from tkinter import messagebox as tkMessageBox
 from PIL import Image, ImageTk
 import socket, threading, sys, traceback, os
+import queue 
 
 from RtpPacket import RtpPacket
 
@@ -35,12 +36,10 @@ class Client:
 		self.teardownAcked = 0
 		self.connectToServer()
 		self.frameNbr = 0
-		self.frameBuffer = b"" # Thêm dòng này để chứa dữ liệu phân mảnh
-		# --- SỬA ĐỔI ---
-		self.cacheBuffer = []        # Dùng List để làm bộ đệm
-		self.BUFFER_THRESHOLD = 60   # Ngưỡng đệm (60 frame)
-		self.isBufferPlaying = False # Cờ trạng thái phát
-		# ---------------
+		self.frameBuffer = b"" 
+		self.cacheBuffer = queue.PriorityQueue(maxsize=1000) 
+		self.BUFFER_THRESHOLD = 60
+		self.isBufferPlaying = False 
 		self.updateGUI()
 		
 	def createWidgets(self):
@@ -74,7 +73,6 @@ class Client:
 		self.label.grid(row=0, column=0, columnspan=4, sticky=W+E+N+S, padx=5, pady=5) 
 
 		# 1. Thanh tiến trình Video (Progress Bar)
-		# Giả sử video dài khoảng 500 frame (hoặc bạn có thể tăng lên nếu video dài hơn)
 		self.progressLabel = Label(self.master, text="Video Progress")
 		self.progressLabel.grid(row=2, column=0, padx=2, pady=2)
 		
@@ -100,12 +98,10 @@ class Client:
 	def exitClient(self):
 		"""Teardown button handler."""
 		self.sendRtspRequest(self.TEARDOWN)		
-		self.master.destroy() # Close the gui window
-		# os.remove(CACHE_FILE_NAME + str(self.sessionId) + CACHE_FILE_EXT) # Delete the cache image from video
+		self.master.destroy() 
 		try:
 			os.remove(CACHE_FILE_NAME + str(self.sessionId) + CACHE_FILE_EXT) 
 		except OSError:
-			# Nếu file không tồn tại (do chưa play được frame nào), bỏ qua lỗi
 			pass
 
 	def pauseMovie(self):
@@ -116,7 +112,6 @@ class Client:
 	def playMovie(self):
 		"""Play button handler."""
 		if self.state == self.READY:
-			# Create a new thread to listen for RTP packets
 			threading.Thread(target=self.listenRtp).start()
 			self.playEvent = threading.Event()
 			self.playEvent.clear()
@@ -126,44 +121,30 @@ class Client:
 		"""Listen for RTP packets."""
 		while True:
 			try:
-				data = self.rtpSocket.recv(20480)
+				data = self.rtpSocket.recv(65535)
 				if data:
 					rtpPacket = RtpPacket()
 					rtpPacket.decode(data)
 					
-					# Lấy dữ liệu payload và thêm vào buffer hiện tại
 				self.frameBuffer += rtpPacket.getPayload()
 
-				# Kiểm tra xem đây có phải gói cuối cùng của khung hình không (Marker = 1)
 				if rtpPacket.getMarker() == 1:
 					currFrameNbr = rtpPacket.seqNum()
-					# print("Current Seq Num: " + str(currFrameNbr))
 
-					# Chỉ hiển thị nếu đây là frame mới (bỏ logic check > frameNbr nếu muốn đơn giản, 
-                    # nhưng tốt nhất giữ lại để tránh hiển thị frame cũ đến muộn)
 					if currFrameNbr > self.frameNbr: 
 						self.frameNbr = currFrameNbr
                         
-                        # --- SỬA ĐỔI Ở ĐÂY ---
-                        # Thay vì gọi self.updateMovie() ngay, ta thêm vào cuối danh sách
-						self.cacheBuffer.append(self.frameBuffer)
+						self.cacheBuffer.put((currFrameNbr, self.frameBuffer))
                         
-                        # Kiểm tra xem kho đã đủ hàng chưa (đủ 20 frame) và đã bắt đầu phát chưa
-						if not self.isBufferPlaying and len(self.cacheBuffer) >= self.BUFFER_THRESHOLD:
-                            # Nếu đủ rồi thì bật cờ và kích hoạt hàm phát (Consumer)
+						if not self.isBufferPlaying and self.cacheBuffer.qsize() >= self.BUFFER_THRESHOLD:
 							self.isBufferPlaying = True
 							self.playMovieFromBuffer()
-                        # ---------------------
 
-					# Xóa buffer sau khi đã xử lý xong khung hình (dù có hiển thị hay không)
 					self.frameBuffer = b""
 			except:
-				# Stop listening upon requesting PAUSE or TEARDOWN
 				if self.playEvent.isSet(): 
 					break
 				
-				# Upon receiving ACK for TEARDOWN request,
-				# close the RTP socket
 				if self.teardownAcked == 1:
 					self.rtpSocket.shutdown(socket.SHUT_RDWR)
 					self.rtpSocket.close()
@@ -194,84 +175,55 @@ class Client:
 	
 	def sendRtspRequest(self, requestCode):
 		"""Send RTSP request to the server."""	
-		#-------------
-		# TO COMPLETE
-		#-------------
 		
 		# Setup request
 		if requestCode == self.SETUP and self.state == self.INIT:
 			threading.Thread(target=self.recvRtspReply).start()
 			# Update RTSP sequence number.
-			# ...
-			# --- CẬP NHẬT: RESET SẠCH SẼ BIẾN CŨ TẠI ĐÂY ---
 			self.rtspSeq = 0
-			self.sessionId = 0          # Reset Session ID cũ
+			self.sessionId = 0          
 			self.requestSent = -1
-			self.teardownAcked = 0      # <--- QUAN TRỌNG NHẤT: Đặt lại cờ này về 0
+			self.teardownAcked = 0      
 			self.frameNbr = 0
-			self.buffer = []            # Xóa buffer cũ
+			
+			self.cacheBuffer = queue.PriorityQueue(maxsize=1000) 
+			
 			self.packetLossCount = 0
 			self.totalBytes = 0
-            # -----------------------------------------------
 			self.rtspSeq += 1 
 
-			# Write the RTSP request to be sent.
-			# request = ...
 			request = "SETUP " + str(self.fileName) + " RTSP/1.0\n" + \
 					  "CSeq: " + str(self.rtspSeq) + "\n" + \
 					  "Transport: RTP/UDP; client_port= " + str(self.rtpPort)
-			# Keep track of the sent request.
-			# self.requestSent = ...
 			self.requestSent = self.SETUP
 		
 		# Play request
 		elif requestCode == self.PLAY and self.state == self.READY:
-			# Update RTSP sequence number.
-			# ...
 			self.rtspSeq += 1
-			# Write the RTSP request to be sent.
-			# request = ...
 			request = "PLAY " + str(self.fileName) + " RTSP/1.0\n" + \
 					  "CSeq: " + str(self.rtspSeq) + "\n" + \
 					  "Session: " + str(self.sessionId)
-			# Keep track of the sent request.
-			# self.requestSent = ...
 			self.requestSent = self.PLAY
 		
 		# Pause request
 		elif requestCode == self.PAUSE and self.state == self.PLAYING:
-			# Update RTSP sequence number.
-			# ...
 			self.rtspSeq += 1
-			# Write the RTSP request to be sent.
-			# request = ...
 			request = "PAUSE " + str(self.fileName) + " RTSP/1.0\n" + \
 					  "CSeq: " + str(self.rtspSeq) + "\n" + \
 					  "Session: " + str(self.sessionId)
-			# Keep track of the sent request.
-			# self.requestSent = ...
 			self.requestSent = self.PAUSE
 			
 		# Teardown request
 		elif requestCode == self.TEARDOWN and not self.state == self.INIT:
-			# Update RTSP sequence number.
-			# ...
 			self.rtspSeq += 1
-			# Write the RTSP request to be sent.
-			# request = ...
 			request = "TEARDOWN " + str(self.fileName) + " RTSP/1.0\n" + \
 					  "CSeq: " + str(self.rtspSeq) + "\n" + \
 					  "Session: " + str(self.sessionId)
-			# Keep track of the sent request.
-			# self.requestSent = ...
 			self.requestSent = self.TEARDOWN
 		else:
 			return
 		
-		# Send the RTSP request using rtspSocket.
-		# ...
 		self.rtspSocket.send(request.encode('utf-8'))
-		
 		print('\nData sent:\n' + request)
 	
 	def recvRtspReply(self):
@@ -282,7 +234,6 @@ class Client:
 			if reply: 
 				self.parseRtspReply(reply.decode("utf-8"))
 			
-			# Close the RTSP socket upon requesting Teardown
 			if self.requestSent == self.TEARDOWN:
 				self.rtspSocket.shutdown(socket.SHUT_RDWR)
 				self.rtspSocket.close()
@@ -293,49 +244,32 @@ class Client:
 		lines = data.split('\n')
 		seqNum = int(lines[1].split(' ')[1])
 		
-		# Process only if the server reply's sequence number is the same as the request's
 		if seqNum == self.rtspSeq:
 			session = int(lines[2].split(' ')[1])
-			# New RTSP session ID
 			if self.sessionId == 0:
 				self.sessionId = session
 			
-			# Process only if the session ID is the same
 			if self.sessionId == session:
 				if int(lines[0].split(' ')[1]) == 200: 
 					if self.requestSent == self.SETUP:
-						#-------------
-						# TO COMPLETE
-						#-------------
-						# Update RTSP state.
-						# self.state = ...
-						self.cacheBuffer = []
+                        # --- THAY ĐỔI: Reset PriorityQueue ---
+						self.cacheBuffer = queue.PriorityQueue(maxsize=1000)
+                        # -------------------------------------
 						self.state = self.READY
-						
-						# Open RTP port.
 						self.openRtpPort() 
 					elif self.requestSent == self.PLAY:
-						# self.state = ...
 						self.state = self.PLAYING
 					elif self.requestSent == self.PAUSE:
-						# self.state = ...
 						self.state = self.READY
-						
-						# The play thread exits. A new thread is created on resume.
 						self.playEvent.set()
 					elif self.requestSent == self.TEARDOWN:
-						# self.state = ...
 						self.state = self.INIT
-						
-						# Flag the teardownAcked to close the socket.
 						self.teardownAcked = 1 
 	
 	def openRtpPort(self):
 		"""Open RTP socket binded to a specified port."""
 		self.rtpSocket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-
 		self.rtpSocket.settimeout(0.5)
-		
 		try:
 			self.rtpSocket.bind(("", self.rtpPort))
 		except:
@@ -345,58 +279,46 @@ class Client:
 		"""Handler on explicitly closing the GUI window."""
 		self.pauseMovie()
 		if tkMessageBox.askokcancel("Quit?", "Are you sure you want to quit?"):
-            # --- THÊM DÒNG NÀY ---
-			self.cacheBuffer = [] # Xóa sạch bộ đệm
+            # --- THAY ĐỔI: Xóa queue ---
+			self.cacheBuffer = queue.PriorityQueue(maxsize=1000)
 			self.isBufferPlaying = False
-            # ---------------------
+            # ---------------------------
 			self.sendRtspRequest(self.TEARDOWN)
-			self.master.destroy() # Close the gui window
-		else: # When the user presses cancel, resume playing.
+			self.master.destroy() 
+		else: 
 			self.playMovie()
 	
 	def playMovieFromBuffer(self):
-		"""Lấy frame từ bộ đệm List và hiển thị."""
-        # Chỉ chạy khi trạng thái là PLAYING
+		"""Lấy frame từ PriorityQueue và hiển thị."""
 		if self.state == self.PLAYING:
             
-            # Kiểm tra xem trong kho còn hàng không
-				if len(self.cacheBuffer) > 0:
-                	# Lấy phần tử đầu tiên ra khỏi danh sách (FIFO) và xóa nó khỏi kho
-					data = self.cacheBuffer.pop(0)
+				if self.cacheBuffer.qsize() > 0:
+					_, data = self.cacheBuffer.get()
                 
-                	# Ghi dữ liệu ra file ảnh và hiển thị lên giao diện
 					self.updateMovie(self.writeFrame(data))
             
-            	# Lập lịch để tự gọi lại chính hàm này sau 50ms (tạo vòng lặp hiển thị)
 				self.master.after(50, self.playMovieFromBuffer)
 		else:
-            # Nếu người dùng bấm PAUSE hoặc TEARDOWN thì dừng vòng lặp
 			self.isBufferPlaying = False
+
 	def updateGUI(self):
 		"""Cập nhật giao diện (Thanh Cache và Progress) liên tục."""
 		
-		# 1. Cập nhật Progress Bar theo số frame hiện tại
 		self.progressScale.set(self.frameNbr)
 		
-		# 2. Cập nhật Cache Bar
-		# Tính phần trăm bộ đệm (Hiện tại / Ngưỡng)
-		current_buffer_size = len(self.cacheBuffer)
+		current_buffer_size = self.cacheBuffer.qsize()
+
 		fill_percent = current_buffer_size / self.BUFFER_THRESHOLD
 		
-		# Giới hạn max là 100% (để không vẽ tràn ra ngoài)
 		if fill_percent > 1.0: fill_percent = 1.0
 		
-		# Tính độ rộng của thanh màu (Canvas rộng 300px)
 		bar_width = 300 * fill_percent
 		
-		# Vẽ lại hình chữ nhật
 		self.cacheCanvas.coords(self.cacheBar, 0, 0, bar_width, 20)
 		
-		# logic: Nếu chưa đầy 100% thì hiện màu đỏ, đầy rồi mới xanh
 		if current_buffer_size < self.BUFFER_THRESHOLD: 
 			self.cacheCanvas.itemconfig(self.cacheBar, fill='red')
 		else:
 			self.cacheCanvas.itemconfig(self.cacheBar, fill='green')
-		# --------------------
 
 		self.master.after(200, self.updateGUI)
